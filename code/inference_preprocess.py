@@ -1,10 +1,7 @@
 import numpy as np
 import cv2
 from skimage.util import img_as_float
-import tensorflow as tf
 import matplotlib.pyplot as plt
-import time
-import scipy.io
 from scipy.sparse import spdiags
 
 
@@ -20,7 +17,6 @@ def preprocess_raw_video(videoFilePath, dim=36):
     height = vidObj.get(cv2.CAP_PROP_FRAME_HEIGHT)
     width = vidObj.get(cv2.CAP_PROP_FRAME_WIDTH)
     success, img = vidObj.read()
-    dims = img.shape
     print("Orignal Height", height)
     print("Original width", width)
     #########################################################################
@@ -96,7 +92,4 @@ def detrend(signal, Lambda):
     diags_data = np.array([ones, minus_twos, ones])
     diags_index = np.array([0, 1, 2])
     D = spdiags(diags_data, diags_index, (signal_length - 2), signal_length).toarray()
-    filtered_signal = np.dot(
-        (H - np.linalg.inv(H + (Lambda**2) * np.dot(D.T, D))), signal
-    )
-    return filtered_signal
+    return np.dot((H - np.linalg.inv(H + (Lambda**2) * np.dot(D.T, D))), signal)

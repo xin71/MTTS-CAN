@@ -32,13 +32,17 @@ from ... import nd as _nd
 from .common import ExprTable, new_var
 from tvm.relay.frontend.common import infer_shape
 
-__all__ = ['from_keras']
+__all__ = ["from_keras"]
 
 
 def _check_data_format(keras_layer):
-    if hasattr(keras_layer, ('data_format')):
-        if keras_layer.data_format != 'channels_last':
-            raise ValueError("Keras frontend currently supports data_format = channels_last only.")
+    if (
+        hasattr(keras_layer, ("data_format"))
+        and keras_layer.data_format != "channels_last"  # noqa:W503
+    ):
+        raise ValueError(
+            "Keras frontend currently supports data_format = channels_last only."
+        )
 
 
 def _get_pad_pair(input1d, kernel1d, stride1d):
@@ -51,23 +55,28 @@ def _get_pad_pair(input1d, kernel1d, stride1d):
 
 def _get_elu(inexpr, alpha):
     """A helper method for elu."""
-    return _op.negative(alpha) * _op.nn.relu(_expr.const(1., dtype='float32') - \
-        _op.exp(inexpr)) + _op.nn.relu(inexpr)
+    return _op.negative(alpha) * _op.nn.relu(
+        _expr.const(1.0, dtype="float32") - _op.exp(inexpr)
+    ) + _op.nn.relu(inexpr)
 
 
 def _as_list(arr):
     """Force being a list, ignore if already is."""
-    if isinstance(arr, list):
-        return arr
-    return [arr]
+    return arr if isinstance(arr, list) else [arr]
 
 
 def _convert_attention_mask(inexpr, keras_layer, etab):
-    xsum = _op.reduce.sum(_op.reduce.sum(inexpr, axis=2, keepdims=True), axis=3, keepdims=True)
+    xsum = _op.reduce.sum(
+        _op.reduce.sum(inexpr, axis=2, keepdims=True), axis=3, keepdims=True
+    )
     xshape = infer_shape(inexpr)
-    out = inexpr / xsum * tvm.relay.expr.const(xshape[2], dtype='float32') \
-          * tvm.relay.expr.const(xshape[3], dtype='float32') * tvm.relay.expr.const(0.5, dtype='float32')
-    return out
+    return (
+        (inexpr)
+        / xsum  # noqa:W503
+        * tvm.relay.expr.const(xshape[2], dtype="float32")  # noqa:W503
+        * tvm.relay.expr.const(xshape[3], dtype="float32")  # noqa:W503
+        * tvm.relay.expr.const(0.5, dtype="float32")  # noqa:W503
+    )
 
 
 def _convert_expand_dim(inexpr, keras_layer, etab):
@@ -78,21 +87,27 @@ def _convert_tsm(inexpr, keras_layer, etab):
 
     nt, c, h, w = infer_shape(inexpr)
     n = int(nt / 10)
-    fold_div = 3
     x = _op.transform.reshape(inexpr, [n, 10, c, h, w])
     fold = c // 3
     # last_fold = c - (fold_div - 1) * fold
-    split_out = _op.split(x, (fold, fold*2, ), axis=2)
+    split_out = _op.split(
+        x,
+        (
+            fold,
+            fold * 2,
+        ),
+        axis=2,
+    )
 
     out1, out2, out3 = split_out[0], split_out[1], split_out[2]
 
     padding_1 = _op.zeros((n, 1, fold, h, w), dtype="float32")
-    out1 = _op.split(out1, (1, ), axis=1)[1]
+    out1 = _op.split(out1, (1,), axis=1)[1]
     out1 = _op.concatenate([out1, padding_1], axis=1)
 
     # Shift right
     padding_2 = _op.zeros((n, 1, fold, h, w), dtype="float32")
-    out2 = _op.split(out2, (10 - 1, ), axis=1)[0]
+    out2 = _op.split(out2, (10 - 1,), axis=1)[0]
     out2 = _op.concatenate([padding_2, out2], axis=1)
 
     out = _op.concatenate([out1, out2, out3], axis=2)
@@ -109,141 +124,171 @@ def _convert_recurrent_activation(inexpr, keras_layer):
 def _convert_activation(inexpr, keras_layer, _):
     if isinstance(keras_layer, str):
         act_type = keras_layer
+    elif sys.version_info.major < 3:
+        act_type = keras_layer.activation.func_name
     else:
-        if sys.version_info.major < 3:
-            act_type = keras_layer.activation.func_name
-        else:
-            act_type = keras_layer.activation.__name__
-    if act_type == 'linear':
-        if isinstance(keras_layer, str):
-            return inexpr
-        alpha = keras_layer.alpha if hasattr(keras_layer, 'alpha') else 1.
-        beta = keras_layer.beta if hasattr(keras_layer, 'beta') else 0.
-        alpha = _expr.const(alpha, dtype='float32')
-        beta = _expr.const(beta, dtype='float32')
-        return _op.add(_op.multiply(inexpr, alpha), beta)
-    if act_type == 'softmax':
+        act_type = keras_layer.activation.__name__
+    if act_type == "linear":
+        return _extracted_from__convert_activation_9(keras_layer, inexpr)
+    if act_type == "softmax":
         return _op.nn.softmax(inexpr, axis=1)
-    if act_type == 'sigmoid':
+    if act_type == "sigmoid":
         return _op.sigmoid(inexpr)
-    if act_type == 'tanh':
+    if act_type == "tanh":
         return _op.tanh(inexpr)
-    if act_type == 'relu':
+    if act_type == "relu":
         return _op.nn.relu(inexpr)
-    if act_type == 'softplus':
-        return _op.log(_op.add(_op.exp(inexpr), _expr.const(1., dtype='float32')))
-    if act_type == 'elu':
-        alpha = keras_layer.alpha if hasattr(keras_layer, 'alpha') else 1.
-        alpha = _expr.const(alpha, dtype='float32')
+    if act_type == "softplus":
+        return _op.log(_op.add(_op.exp(inexpr), _expr.const(1.0, dtype="float32")))
+    if act_type == "elu":
+        alpha = keras_layer.alpha if hasattr(keras_layer, "alpha") else 1.0
+        alpha = _expr.const(alpha, dtype="float32")
         return _get_elu(inexpr, alpha)
-    if act_type == 'selu':
+    if act_type == "selu":
         # Alpha, Gamma values obtained from https://arxiv.org/abs/1706.02515
-        alpha = keras_layer.alpha if hasattr(keras_layer, 'alpha') \
+        alpha = (
+            keras_layer.alpha
+            if hasattr(keras_layer, "alpha")
             else 1.6732632423543772848170429916717
-        gamma = keras_layer.gamma if hasattr(keras_layer, 'gamma') \
+        )
+        gamma = (
+            keras_layer.gamma
+            if hasattr(keras_layer, "gamma")
             else 1.0507009873554804934193349852946
-        alpha = _expr.const(alpha, dtype='float32')
-        gamma = _expr.const(gamma, dtype='float32')
+        )
+        alpha = _expr.const(alpha, dtype="float32")
+        gamma = _expr.const(gamma, dtype="float32")
         return gamma * _get_elu(inexpr, alpha)
-    if act_type == 'relu6':
-        return _op.clip(inexpr, a_min=0., a_max=6.)
-    if act_type == 'softsign':
-        return inexpr / (_expr.const(1., dtype='float32') + _op.abs(inexpr))
-    if act_type == 'hard_sigmoid':
-        x = (_expr.const(0.2, dtype='float32') * inexpr) + _expr.const(0.5, dtype='float32')
-        return _op.clip(x, a_min=0., a_max=1.)
+    if act_type == "relu6":
+        return _op.clip(inexpr, a_min=0.0, a_max=6.0)
+    if act_type == "softsign":
+        return inexpr / (_expr.const(1.0, dtype="float32") + _op.abs(inexpr))
+    if act_type == "hard_sigmoid":
+        x = (_expr.const(0.2, dtype="float32") * inexpr) + _expr.const(
+            0.5, dtype="float32"
+        )
+        return _op.clip(x, a_min=0.0, a_max=1.0)
 
     raise tvm.error.OpNotImplemented(
-        'Operator {} is not supported in frontend Keras.'.format(act_type))
+        f"Operator {act_type} is not supported in frontend Keras."
+    )
+
+
+# TODO Rename this here and in `_convert_activation`
+def _extracted_from__convert_activation_9(keras_layer, inexpr):
+    if isinstance(keras_layer, str):
+        return inexpr
+    alpha = keras_layer.alpha if hasattr(keras_layer, "alpha") else 1.0
+    beta = keras_layer.beta if hasattr(keras_layer, "beta") else 0.0
+    alpha = _expr.const(alpha, dtype="float32")
+    beta = _expr.const(beta, dtype="float32")
+    return _op.add(_op.multiply(inexpr, alpha), beta)
 
 
 def _convert_advanced_activation(inexpr, keras_layer, etab):
     act_type = type(keras_layer).__name__
 
-    if act_type == 'Softmax':
+    if act_type == "Softmax":
         axis = keras_layer.axis
         dims = len(keras_layer.input_shape)
         if isinstance(axis, list):
             raise tvm.error.OpAttributeUnImplemented(
-                'Softmax with axes {} is not supported.'.format(axis))
+                f"Softmax with axes {axis} is not supported."
+            )
         if axis == -1:
             axis = 1
         else:
             axis = axis + 1 if axis < dims - 1 else 1
         return _op.nn.softmax(inexpr, axis=axis)
-    if act_type == 'ReLU':
-        threshold = _expr.const(keras_layer.threshold, dtype='float32')
+    if act_type == "ReLU":
+        threshold = _expr.const(keras_layer.threshold, dtype="float32")
         if keras_layer.max_value and float(keras_layer.threshold) == 0:
             # f(x) = max_value, for x >= max_value
             # f(x) = x,         for threshold <= x < max_value
-            return _op.clip(inexpr, a_min=0., a_max=float(keras_layer.max_value))
-        if keras_layer.max_value and _op.greater(threshold, inexpr).astype('float32'):
+            return _op.clip(inexpr, a_min=0.0, a_max=float(keras_layer.max_value))
+        if keras_layer.max_value and _op.greater(threshold, inexpr).astype("float32"):
             # f(x) = negative_slope * (inexpr - threshold)
-            negative_slope = _expr.const(keras_layer.negative_slope, dtype='float32')
+            negative_slope = _expr.const(keras_layer.negative_slope, dtype="float32")
             return _op.multiply(negative_slope, _op.subtract(inexpr, threshold))
         return _op.nn.relu(inexpr)
-    if act_type == 'LeakyReLU':
+    if act_type == "LeakyReLU":
         return _op.nn.leaky_relu(inexpr, alpha=float(keras_layer.alpha))
-    if act_type == 'ELU':
-        alpha = keras_layer.alpha if hasattr(keras_layer, 'alpha') else 1.
-        alpha = _expr.const(alpha, dtype='float32')
+    if act_type == "ELU":
+        alpha = keras_layer.alpha if hasattr(keras_layer, "alpha") else 1.0
+        alpha = _expr.const(alpha, dtype="float32")
         return _get_elu(inexpr, alpha)
-    if act_type == 'PReLU':
-        assert hasattr(keras_layer, 'alpha'), "alpha required for PReLU."
+    if act_type == "PReLU":
+        assert hasattr(keras_layer, "alpha"), "alpha required for PReLU."
         _check_data_format(keras_layer)
         size = len(keras_layer.alpha.shape)
-        alpha = etab.new_const(keras_layer.get_weights()[0] \
-                               .transpose(np.roll(range(size), 1)))
-        return _op.negative(alpha) * _op.nn.relu(_op.negative(inexpr)) + _op.nn.relu(inexpr)
-    if act_type == 'ThresholdedReLU':
-        theta = keras_layer.theta if hasattr(keras_layer, 'theta') else 1.
-        return _op.multiply(inexpr, _op.greater(inexpr, \
-            _expr.const(theta, dtype='float32')).astype('float32'))
+        alpha = etab.new_const(
+            keras_layer.get_weights()[0].transpose(np.roll(range(size), 1))
+        )
+        return _op.negative(alpha) * _op.nn.relu(_op.negative(inexpr)) + _op.nn.relu(
+            inexpr
+        )
+    if act_type == "ThresholdedReLU":
+        theta = keras_layer.theta if hasattr(keras_layer, "theta") else 1.0
+        return _op.multiply(
+            inexpr,
+            _op.greater(inexpr, _expr.const(theta, dtype="float32")).astype("float32"),
+        )
 
     raise tvm.error.OpNotImplemented(
-        'Operator {} is not supported in frontend Keras.'.format(act_type))
+        f"Operator {act_type} is not supported in frontend Keras."
+    )
 
 
 def _convert_merge(inexpr, keras_layer, _):
     merge_type = type(keras_layer).__name__
     ret = inexpr[0]
-    if merge_type == 'Dot':
-        axes = keras_layer.axes
-        if isinstance(keras_layer.axes, int):
-            axes = [keras_layer.axes, keras_layer.axes]
-        if isinstance(axes, list):
-            if len(axes) != 2:
-                raise tvm.error.OpAttributeUnImplemented(
-                    'Dot with axes {} is not supported.'.format(keras_layer.axes))
-            for i, axis in enumerate(axes):
-                if axis not in [1, 2]:
-                    raise tvm.error.OpAttributeUnImplemented(
-                        'Dot with axes {} is not supported.'.format(keras_layer.axes))
-                if axes[i] == 2:
-                    inexpr[i] = _op.transpose(inexpr[i], axes=[0, 2, 1])
-        else:
-            raise tvm.error.OpAttributeUnImplemented(
-                'Dot with axes {} is not supported.'.format(keras_layer.axes))
-        ret_dot = _op.nn.batch_matmul(inexpr[0], inexpr[1])
-        ret = _op.transpose(ret_dot, axes=[0, 2, 1])
-    elif merge_type == 'Subtract':
+    if merge_type == "Dot":
+        ret = _extracted_from__convert_merge_(keras_layer, inexpr)
+    elif merge_type == "Subtract":
         assert len(inexpr) == 2, "Subtract merge takes 2 inputs."
         ret = _op.subtract(ret, inexpr[1])
-    elif merge_type in ['Add', 'Multiply', 'Minimum', 'Maximum']:
-        op_map = {'Add': _op.add,
-                  'Multiply': _op.multiply,
-                  'Minimum': _op.minimum,
-                  'Maximum': _op.maximum}
+    elif merge_type in ["Add", "Multiply", "Minimum", "Maximum"]:
+        op_map = {
+            "Add": _op.add,
+            "Multiply": _op.multiply,
+            "Minimum": _op.minimum,
+            "Maximum": _op.maximum,
+        }
         for i in range(1, len(inexpr)):
             ret = op_map[merge_type](ret, inexpr[i])
-    elif merge_type == 'Average':
+    elif merge_type == "Average":
         for i in range(1, len(inexpr)):
             ret = _op.add(ret, inexpr[i])
-        ret = ret / _expr.const(len(inexpr), dtype='float32')
+        ret = ret / _expr.const(len(inexpr), dtype="float32")
     else:
         raise tvm.error.OpNotImplemented(
-            'Operator {} is not supported in frontend Keras.'.format(merge_type))
+            f"Operator {merge_type} is not supported in frontend Keras."
+        )
     return ret
+
+
+# TODO Rename this here and in `_convert_merge`
+def _extracted_from__convert_merge_(keras_layer, inexpr):
+    axes = keras_layer.axes
+    if isinstance(keras_layer.axes, int):
+        axes = [keras_layer.axes, keras_layer.axes]
+    if not isinstance(axes, list):
+        raise tvm.error.OpAttributeUnImplemented(
+            f"Dot with axes {keras_layer.axes} is not supported."
+        )
+    if len(axes) != 2:
+        raise tvm.error.OpAttributeUnImplemented(
+            f"Dot with axes {keras_layer.axes} is not supported."
+        )
+    for i, axis in enumerate(axes):
+        if axis not in [1, 2]:
+            raise tvm.error.OpAttributeUnImplemented(
+                f"Dot with axes {keras_layer.axes} is not supported."
+            )
+        if axes[i] == 2:
+            inexpr[i] = _op.transpose(inexpr[i], axes=[0, 2, 1])
+    ret_dot = _op.nn.batch_matmul(inexpr[0], inexpr[1])
+    return _op.transpose(ret_dot, axes=[0, 2, 1])
 
 
 def _convert_permute(inexpr, keras_layer, _):
@@ -254,22 +299,22 @@ def _convert_embedding(inexpr, keras_layer, etab):
     indices = inexpr
     weightList = keras_layer.get_weights()
     weight = etab.new_const(weightList[0])
-    out = _op.take(weight, indices.astype('int32'), axis=0)
+    return _op.take(weight, indices.astype("int32"), axis=0)
 
-    return out
 
 def _convert_dense(inexpr, keras_layer, etab):
     weightList = keras_layer.get_weights()
     weight = etab.new_const(weightList[0].transpose([1, 0]))
-    params = {'weight': weight, 'units': weightList[0].shape[1]}
+    params = {"weight": weight, "units": weightList[0].shape[1]}
     input_shape = keras_layer.input_shape
     input_dim = len(input_shape)
     # In case of RNN dense, input shape will be (1, 1, n)
     if input_dim > 2:
-        input_shape = tuple(dim if dim else 1 for dim in _as_list(input_shape)[0])
+        input_shape = tuple(dim or 1 for dim in _as_list(input_shape)[0])
         if input_dim != 3 or input_shape[0] != 1 or input_shape[1] != 1:
             raise tvm.error.OpAttributeInvalid(
-                'Input shape {} is not valid for operator Dense.'.format(input_shape))
+                f"Input shape {input_shape} is not valid for operator Dense."
+            )
         inexpr = _op.squeeze(inexpr, axis=0)
     out = _op.nn.dense(data=inexpr, **params)
     if keras_layer.use_bias:
@@ -280,7 +325,7 @@ def _convert_dense(inexpr, keras_layer, etab):
         act_type = keras_layer.activation.func_name
     else:
         act_type = keras_layer.activation.__name__
-    if act_type != 'linear':
+    if act_type != "linear":
         out = _convert_activation(out, act_type, etab)
     if input_dim > 2:
         out = _op.expand_dims(out, axis=0)
@@ -289,28 +334,24 @@ def _convert_dense(inexpr, keras_layer, etab):
 
 def _convert_convolution(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
-    is_deconv = type(keras_layer).__name__ == 'Conv2DTranspose'
-    is_depthconv = type(keras_layer).__name__ == 'DepthwiseConv2D'
+    is_deconv = type(keras_layer).__name__ == "Conv2DTranspose"
+    is_depthconv = type(keras_layer).__name__ == "DepthwiseConv2D"
     weightList = keras_layer.get_weights()
     weight = weightList[0]
-    if etab.data_layout == 'NHWC':
-        if is_depthconv:
-            kernel_layout = 'HWOI'
-        else:
-            kernel_layout = 'HWIO'
+    if etab.data_layout == "NHWC":
+        kernel_layout = "HWOI" if is_depthconv else "HWIO"
     else:
-        kernel_layout = 'OIHW'
-
+        kernel_layout = "OIHW"
 
     if is_deconv:
         kernel_h, kernel_w, n_filters, in_channels = weight.shape
-        if kernel_layout == 'OIHW':
+        if kernel_layout == "OIHW":
             weight = weight.transpose([3, 2, 0, 1])
     elif is_depthconv:
         kernel_h, kernel_w, in_channels, depth_mult = weight.shape
-        if kernel_layout == 'OIHW':
+        if kernel_layout == "OIHW":
             weight = weight.transpose([2, 3, 0, 1])
-    elif etab.data_layout == 'NCHW':
+    elif etab.data_layout == "NCHW":
         kernel_h, kernel_w, in_channels, n_filters = weight.shape
         weight = weight.transpose([3, 2, 0, 1])
     else:
@@ -322,30 +363,34 @@ def _convert_convolution(inexpr, keras_layer, etab):
     dilated_kernel_h = (kernel_h - 1) * dilation[0] + 1
     dilated_kernel_w = (kernel_w - 1) * dilation[1] + 1
     stride_h, stride_w = keras_layer.strides
-    params = {'weight': etab.new_const(weight, dtype=str(weight.dtype)),
-              'kernel_size': [kernel_h, kernel_w],
-              'strides': [stride_h, stride_w],
-              'dilation': dilation,
-              'padding': [0, 0],
-              'data_layout': etab.data_layout,
-              'kernel_layout': kernel_layout}
+    params = {
+        "weight": etab.new_const(weight, dtype=str(weight.dtype)),
+        "kernel_size": [kernel_h, kernel_w],
+        "strides": [stride_h, stride_w],
+        "dilation": dilation,
+        "padding": [0, 0],
+        "data_layout": etab.data_layout,
+        "kernel_layout": kernel_layout,
+    }
     if is_depthconv:
-        params['channels'] = in_channels * depth_mult
-        params['groups'] = in_channels
+        params["channels"] = in_channels * depth_mult
+        params["groups"] = in_channels
     else:
-        params['channels'] = n_filters
-    if keras_layer.padding == 'valid':
+        params["channels"] = n_filters
+    if keras_layer.padding == "valid":
         pass
     # we insert a separate pad operator
-    elif keras_layer.padding == 'same':
+    elif keras_layer.padding == "same":
         in_h = keras_layer.input_shape[1]
         in_w = keras_layer.input_shape[2]
         pad_t, pad_b = _get_pad_pair(in_h, dilated_kernel_h, stride_h)
         pad_l, pad_r = _get_pad_pair(in_w, dilated_kernel_w, stride_w)
-        params['padding'] = (pad_t, pad_l, pad_b, pad_r)
+        params["padding"] = (pad_t, pad_l, pad_b, pad_r)
     else:
-        msg = 'Padding with {} is not supported for operator Convolution ' \
-              'in frontend Keras.'
+        msg = (
+            "Padding with {} is not supported for operator Convolution "
+            "in frontend Keras."
+        )
         raise tvm.error.OpAttributeUnImplemented(msg.format(keras_layer.padding))
     if is_deconv:
         out = _op.nn.conv2d_transpose(data=inexpr, **params)
@@ -354,7 +399,7 @@ def _convert_convolution(inexpr, keras_layer, etab):
 
     if keras_layer.use_bias:
         bias = etab.new_const(weightList[1])
-        if etab.data_layout == 'NCHW':
+        if etab.data_layout == "NCHW":
             out = _op.nn.bias_add(out, bias)
         else:
             out = _op.nn.bias_add(out, bias, axis=-1)
@@ -363,21 +408,24 @@ def _convert_convolution(inexpr, keras_layer, etab):
         act_type = keras_layer.activation.func_name
     else:
         act_type = keras_layer.activation.__name__
-    if act_type != 'linear':
+    if act_type != "linear":
         out = _convert_activation(out, act_type, etab)
     return out
+
 
 def _convert_convolution3d(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     weightList = keras_layer.get_weights()
     weight = weightList[0]
 
-    if etab.data_layout == 'NDHWC':
-        kernel_layout = 'DHWIO'
+    if etab.data_layout == "NDHWC":
+        kernel_layout = "DHWIO"
     else:
-        kernel_layout = 'OIDHW'
-        msg = 'Kernel layout with {} is not supported for operator Convolution3D ' \
-              'in frontend Keras.'
+        kernel_layout = "OIDHW"
+        msg = (
+            "Kernel layout with {} is not supported for operator Convolution3D "
+            "in frontend Keras."
+        )
         raise tvm.error.OpAttributeUnImplemented(msg.format(etab.data_layout))
 
     dilation_rate = keras_layer.dilation_rate
@@ -396,29 +444,39 @@ def _convert_convolution3d(inexpr, keras_layer, etab):
     dilated_kernel_d2 = (kernel_d2 - 1) * dilation[1] + 1
     dilated_kernel_d3 = (kernel_d3 - 1) * dilation[2] + 1
     stride_d1, stride_d2, stride_d3 = keras_layer.strides
-    params = {'weight': etab.new_const(weight),
-              'kernel_size': [kernel_d1, kernel_d2, kernel_d3],
-              'strides': [stride_d1, stride_d2, stride_d3],
-              'dilation': dilation,
-              'padding': [0, 0, 0],
-              'data_layout': etab.data_layout,
-              'kernel_layout': kernel_layout}
-    params['channels'] = n_filters
-
-    if keras_layer.padding == 'valid':
+    params = {
+        "weight": etab.new_const(weight),
+        "kernel_size": [kernel_d1, kernel_d2, kernel_d3],
+        "strides": [stride_d1, stride_d2, stride_d3],
+        "dilation": dilation,
+        "padding": [0, 0, 0],
+        "data_layout": etab.data_layout,
+        "kernel_layout": kernel_layout,
+        "channels": n_filters,
+    }
+    if keras_layer.padding == "valid":
         pass
     # calculate the padding values
-    elif keras_layer.padding == 'same':
+    elif keras_layer.padding == "same":
         in_d1 = keras_layer.input_shape[1]
         in_d2 = keras_layer.input_shape[2]
         in_d3 = keras_layer.input_shape[3]
         pad_d1 = _get_pad_pair(in_d1, dilated_kernel_d1, stride_d1)
         pad_d2 = _get_pad_pair(in_d2, dilated_kernel_d2, stride_d2)
         pad_d3 = _get_pad_pair(in_d3, dilated_kernel_d3, stride_d3)
-        params['padding'] = [pad_d1[0], pad_d2[0], pad_d3[0], pad_d1[1], pad_d2[1], pad_d3[1]]
+        params["padding"] = [
+            pad_d1[0],
+            pad_d2[0],
+            pad_d3[0],
+            pad_d1[1],
+            pad_d2[1],
+            pad_d3[1],
+        ]
     else:
-        msg = 'Padding with {} is not supported for operator Convolution ' \
-              'in frontend Keras.'
+        msg = (
+            "Padding with {} is not supported for operator Convolution "
+            "in frontend Keras."
+        )
         raise tvm.error.OpAttributeUnImplemented(msg.format(keras_layer.padding))
     out = _op.nn.conv3d(data=inexpr, **params)
 
@@ -432,65 +490,69 @@ def _convert_convolution3d(inexpr, keras_layer, etab):
         act_type = keras_layer.activation.func_name
     else:
         act_type = keras_layer.activation.__name__
-    if act_type != 'linear':
+    if act_type != "linear":
         out = _convert_activation(out, act_type, etab)
     return out
 
+
 def _convert_separable_convolution(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
-    if etab.data_layout == 'NHWC':
-        kernel_layout = 'HWOI'
-    else:
-        kernel_layout = 'OIHW'
+    kernel_layout = "HWOI" if etab.data_layout == "NHWC" else "OIHW"
     weightList = keras_layer.get_weights()
     # depthwise conv
     kernel_h, kernel_w, in_channels, depth_mult = weightList[0].shape
     stride_h, stride_w = keras_layer.strides
-    if kernel_layout == 'OIHW':
+    if kernel_layout == "OIHW":
         weight0 = weightList[0].transpose([2, 3, 0, 1])
     else:
         weight0 = weightList[0]
-    params0 = {'weight': etab.new_const(weight0),
-               'channels': in_channels * depth_mult,
-               'groups': in_channels,
-               'kernel_size': [kernel_h, kernel_w],
-               'strides': [stride_h, stride_w],
-               'dilation': [1, 1],
-               'padding': [0, 0],
-               'data_layout': etab.data_layout,
-               'kernel_layout': kernel_layout}
-    if keras_layer.padding == 'valid':
+    params0 = {
+        "weight": etab.new_const(weight0),
+        "channels": in_channels * depth_mult,
+        "groups": in_channels,
+        "kernel_size": [kernel_h, kernel_w],
+        "strides": [stride_h, stride_w],
+        "dilation": [1, 1],
+        "padding": [0, 0],
+        "data_layout": etab.data_layout,
+        "kernel_layout": kernel_layout,
+    }
+    if keras_layer.padding == "valid":
         pass
     # we insert a separate pad operator
-    elif keras_layer.padding == 'same':
+    elif keras_layer.padding == "same":
         in_h = keras_layer.input_shape[1]
         in_w = keras_layer.input_shape[2]
         pad_t, pad_b = _get_pad_pair(in_h, kernel_h, stride_h)
         pad_l, pad_r = _get_pad_pair(in_w, kernel_w, stride_w)
-        params0['padding'] = (pad_t, pad_l, pad_b, pad_r)
+        params0["padding"] = (pad_t, pad_l, pad_b, pad_r)
     else:
-        msg = 'Padding with {} is not supported for operator Separable ' \
-              'Convolution in frontend Keras.'
+        msg = (
+            "Padding with {} is not supported for operator Separable "
+            "Convolution in frontend Keras."
+        )
         raise tvm.error.OpAttributeUnImplemented(msg.format(keras_layer.padding))
     depthconv = _op.nn.conv2d(data=inexpr, **params0)
     # pointwise conv
-    if kernel_layout == 'OIHW':
+    if kernel_layout == "OIHW":
         weight1 = weightList[1].transpose([3, 2, 0, 1])
     else:
         weight1 = weightList[1]
         kernel_layout = "HWIO"
-    params1 = {'weight': etab.new_const(weight1),
-               'channels': weightList[1].shape[3],
-               'groups': 1,
-               'kernel_size': [1, 1],
-               'strides': [1, 1],
-               'dilation': [1, 1],
-               'data_layout': etab.data_layout,
-               'kernel_layout': kernel_layout}
+    params1 = {
+        "weight": etab.new_const(weight1),
+        "channels": weightList[1].shape[3],
+        "groups": 1,
+        "kernel_size": [1, 1],
+        "strides": [1, 1],
+        "dilation": [1, 1],
+        "data_layout": etab.data_layout,
+        "kernel_layout": kernel_layout,
+    }
     out = _op.nn.conv2d(data=depthconv, **params1)
     if keras_layer.use_bias:
         bias = etab.new_const(weightList[2])
-        if etab.data_layout == 'NCHW':
+        if etab.data_layout == "NCHW":
             out = _op.nn.bias_add(out, bias)
         else:
             out = _op.nn.bias_add(out, bias, axis=-1)
@@ -499,7 +561,7 @@ def _convert_separable_convolution(inexpr, keras_layer, etab):
         act_type = keras_layer.activation.func_name
     else:
         act_type = keras_layer.activation.__name__
-    if act_type != 'linear':
+    if act_type != "linear":
         out = _convert_activation(out, act_type, etab)
     return out
 
@@ -507,7 +569,7 @@ def _convert_separable_convolution(inexpr, keras_layer, etab):
 def _convert_flatten(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     # NCHW -> NHWC so that dense can be correctly converted
-    if etab.data_layout == 'NCHW':
+    if etab.data_layout == "NCHW":
         inexpr = _op.transpose(inexpr, axes=[0, 2, 3, 1])
     return _op.nn.batch_flatten(inexpr)
 
@@ -516,161 +578,187 @@ def _convert_pooling(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     pool_type = type(keras_layer).__name__
     # global pool in keras = global pool + flatten in relay
-    global_pool_params = {'layout': etab.data_layout}
-    if pool_type == 'GlobalMaxPooling2D':
+    global_pool_params = {"layout": etab.data_layout}
+    if pool_type == "GlobalMaxPooling2D":
         return _convert_flatten(
-            _op.nn.global_max_pool2d(inexpr, **global_pool_params), keras_layer, etab)
-    if pool_type == 'GlobalAveragePooling2D':
+            _op.nn.global_max_pool2d(inexpr, **global_pool_params), keras_layer, etab
+        )
+    if pool_type == "GlobalAveragePooling2D":
         return _convert_flatten(
-            _op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab)
+            _op.nn.global_avg_pool2d(inexpr, **global_pool_params), keras_layer, etab
+        )
     pool_h, pool_w = keras_layer.pool_size
     stride_h, stride_w = keras_layer.strides
-    params = {'pool_size': [pool_h, pool_w],
-              'strides': [stride_h, stride_w],
-              'padding': [0, 0],
-              'layout': etab.data_layout}
-    if keras_layer.padding == 'valid':
+    params = {
+        "pool_size": [pool_h, pool_w],
+        "strides": [stride_h, stride_w],
+        "padding": [0, 0],
+        "layout": etab.data_layout,
+    }
+    if keras_layer.padding == "valid":
         pass
-    elif keras_layer.padding == 'same':
+    elif keras_layer.padding == "same":
         in_h = keras_layer.input_shape[1]
         in_w = keras_layer.input_shape[2]
         pad_t, pad_b = _get_pad_pair(in_h, pool_h, stride_h)
         pad_l, pad_r = _get_pad_pair(in_w, pool_w, stride_w)
-        params['padding'] = [pad_t, pad_l, pad_b, pad_r]
+        params["padding"] = [pad_t, pad_l, pad_b, pad_r]
     else:
         raise tvm.error.OpAttributeUnImplemented(
-            'Padding with {} is not supported in operator Pooling.'.format(keras_layer.padding))
-    if pool_type == 'MaxPooling2D':
+            f"Padding with {keras_layer.padding} is not supported in operator Pooling."
+        )
+    if pool_type == "MaxPooling2D":
         return _op.nn.max_pool2d(inexpr, **params)
-    if pool_type == 'AveragePooling2D':
-        params['count_include_pad'] = False
+    if pool_type == "AveragePooling2D":
+        params["count_include_pad"] = False
         return _op.nn.avg_pool2d(inexpr, **params)
     raise tvm.error.OpNotImplemented(
-        'Operator {} is not supported for frontend Keras.'.format(keras_layer))
+        f"Operator {keras_layer} is not supported for frontend Keras."
+    )
+
 
 def _convert_pooling3d(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     pool_type = type(keras_layer).__name__
 
-    if pool_type not in ['MaxPooling3D', 'AveragePooling3D']:
+    if pool_type not in ["MaxPooling3D", "AveragePooling3D"]:
         raise tvm.error.OpNotImplemented(
-            'Operator {} is not supported for frontend Keras.'.format(keras_layer))
+            f"Operator {keras_layer} is not supported for frontend Keras."
+        )
 
     pool_d1, pool_d2, pool_d3 = keras_layer.pool_size
     stride_d1, stride_d2, stride_d3 = keras_layer.strides
-    params = {'pool_size': [pool_d1, pool_d2, pool_d3],
-              'strides': [stride_d1, stride_d2, stride_d3],
-              'padding': [0, 0, 0],
-              'layout': etab.data_layout}
+    params = {
+        "pool_size": [pool_d1, pool_d2, pool_d3],
+        "strides": [stride_d1, stride_d2, stride_d3],
+        "padding": [0, 0, 0],
+        "layout": etab.data_layout,
+    }
 
-    if keras_layer.padding == 'valid':
+    if keras_layer.padding == "valid":
         pass
-    elif keras_layer.padding == 'same':
+    elif keras_layer.padding == "same":
         in_d1 = keras_layer.input_shape[1]
         in_d2 = keras_layer.input_shape[2]
         in_d3 = keras_layer.input_shape[3]
         pad_d1 = _get_pad_pair(in_d1, pool_d1, stride_d1)
         pad_d2 = _get_pad_pair(in_d2, pool_d2, stride_d2)
         pad_d3 = _get_pad_pair(in_d3, pool_d3, stride_d3)
-        params['padding'] = [pad_d1[0], pad_d2[0], pad_d3[0], pad_d1[1], pad_d2[1], pad_d3[1]]
+        params["padding"] = [
+            pad_d1[0],
+            pad_d2[0],
+            pad_d3[0],
+            pad_d1[1],
+            pad_d2[1],
+            pad_d3[1],
+        ]
     else:
         raise tvm.error.OpAttributeUnImplemented(
-            'Padding with {} is not supported in operator Pooling3D.'.format(keras_layer.padding))
+            f"Padding with {keras_layer.padding} is not supported in operator Pooling3D."
+        )
 
     out = _op.transpose(inexpr, axes=(0, 4, 1, 2, 3))
-    params['layout'] = "NCDHW"
-    if pool_type == 'MaxPooling3D':
+    params["layout"] = "NCDHW"
+    if pool_type == "MaxPooling3D":
         out = _op.nn.max_pool3d(out, **params)
-    elif pool_type == 'AveragePooling3D':
+    elif pool_type == "AveragePooling3D":
         out = _op.nn.avg_pool3d(out, **params)
 
     return _op.transpose(out, axes=(0, 2, 3, 4, 1))
+
 
 def _convert_upsample(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     upsample_type = type(keras_layer).__name__
     params = {}
-    if upsample_type == 'UpSampling1D':
+    if upsample_type == "UpSampling1D":
         h = keras_layer.size
-        params['scale_h'] = h
-    elif upsample_type == 'UpSampling2D':
+        params["scale_h"] = h
+    elif upsample_type == "UpSampling2D":
         h, w = keras_layer.size
         if h != w:
             raise tvm.error.OpAttributeInvalid(
-                'Height must equal width for operator Upsample.')
-        params['scale_h'] = h
-        params['scale_w'] = h
+                "Height must equal width for operator Upsample."
+            )
+        params["scale_h"] = h
+        params["scale_w"] = h
 
-        if hasattr(keras_layer, 'interpolation'):
+        if hasattr(keras_layer, "interpolation"):
             interpolation = keras_layer.interpolation
-            if interpolation == 'nearest':
-                params['method'] = 'nearest_neighbor'
+            if interpolation == "nearest":
+                params["method"] = "nearest_neighbor"
             else:
-                params['method'] = 'bilinear'
+                params["method"] = "bilinear"
     else:
         raise tvm.error.OpNotImplemented(
-            'Operator {} is not supported for frontend Keras.'.format(upsample_type))
-    params['layout'] = etab.data_layout
-    out = _op.nn.upsampling(inexpr, **params)
-    return out
+            f"Operator {upsample_type} is not supported for frontend Keras."
+        )
+    params["layout"] = etab.data_layout
+    return _op.nn.upsampling(inexpr, **params)
 
 
 def _convert_upsample3d(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
-    params = {}
     d, h, w = keras_layer.size
-    params['scale_d'] = d
-    params['scale_h'] = h
-    params['scale_w'] = w
-    params['layout'] = etab.data_layout
-    out = _op.nn.upsampling3d(inexpr, **params)
-    return out
+    params = {"scale_d": d, "scale_h": h, "scale_w": w, "layout": etab.data_layout}
+    return _op.nn.upsampling3d(inexpr, **params)
 
 
 def _convert_cropping(inexpr, keras_layer, _):
     _check_data_format(keras_layer)
     crop_type = type(keras_layer).__name__
-    if crop_type == 'Cropping2D':
-        (_, in_h, in_w, _) = keras_layer.input_shape
-        ((crop_t, crop_b), (crop_l, crop_r)) = keras_layer.cropping
-    else:
+    if crop_type != "Cropping2D":
         raise tvm.error.OpNotImplemented(
-            'Operator {} is not supported for frontend Keras.'.format(crop_type))
+            f"Operator {crop_type} is not supported for frontend Keras."
+        )
+    (_, in_h, in_w, _) = keras_layer.input_shape
+    ((crop_t, crop_b), (crop_l, crop_r)) = keras_layer.cropping
     int32_max = np.iinfo(np.int32).max
-    return _op.strided_slice(inexpr, begin=[0, 0, crop_t, crop_l], \
-        end=[int32_max, int32_max, in_h-crop_b, in_w-crop_r])
+    return _op.strided_slice(
+        inexpr,
+        begin=[0, 0, crop_t, crop_l],
+        end=[int32_max, int32_max, in_h - crop_b, in_w - crop_r],
+    )
 
 
 def _convert_batchnorm(inexpr, keras_layer, etab):
-    if etab.data_layout == 'NCHW' or len(keras_layer.input_shape) < 4:
+    if etab.data_layout == "NCHW" or len(keras_layer.input_shape) < 4:
         axis = 1
     else:
         axis = 3
 
-    params = {'scale': False,
-              'center': False,
-              'epsilon': keras_layer.epsilon,
-              'axis': axis}
+    params = {
+        "scale": False,
+        "center": False,
+        "epsilon": keras_layer.epsilon,
+        "axis": axis,
+    }
     idx = 0
     if keras_layer.scale:
-        params['scale'] = True
+        params["scale"] = True
         gamma = keras_layer.get_weights()[idx]
-        params['gamma'] = etab.new_const(gamma)
+        params["gamma"] = etab.new_const(gamma)
         idx += 1
     if keras_layer.center:
-        params['center'] = True
+        params["center"] = True
         beta = keras_layer.get_weights()[idx]
-        params['beta'] = etab.new_const(beta)
+        params["beta"] = etab.new_const(beta)
         idx += 1
     moving_mean = keras_layer.get_weights()[idx]
     moving_var = keras_layer.get_weights()[idx + 1]
-    params['moving_mean'] = etab.new_const(moving_mean)
-    params['moving_var'] = etab.new_const(moving_var)
+    params["moving_mean"] = etab.new_const(moving_mean)
+    params["moving_var"] = etab.new_const(moving_var)
     # in case beta or gamma is not defined
-    params['beta'] = etab.new_const(np.zeros(moving_mean.shape)) if \
-                     'beta' not in params else params['beta']
-    params['gamma'] = etab.new_const(np.ones(moving_mean.shape)) if \
-                      'gamma' not in params else params['gamma']
+    params["beta"] = (
+        etab.new_const(np.zeros(moving_mean.shape))
+        if "beta" not in params
+        else params["beta"]
+    )
+    params["gamma"] = (
+        etab.new_const(np.ones(moving_mean.shape))
+        if "gamma" not in params
+        else params["gamma"]
+    )
     result, moving_mean, moving_var = _op.nn.batch_norm(inexpr, **params)
     return result
 
@@ -680,30 +768,44 @@ def _convert_padding(inexpr, keras_layer, etab):
     padding_type = type(keras_layer).__name__
     padding = keras_layer.padding
     top = left = bottom = right = 0
-    if padding_type == 'ZeroPadding2D':
-        if isinstance(padding, int):
-            top = left = bottom = right = padding
-        elif isinstance(padding, tuple):
-            if isinstance(padding[0], int):
-                top, left = padding
-                bottom, right = padding
-            elif isinstance(padding[0], tuple):
-                top, bottom = padding[0]
-                left, right = padding[1]
-            else:
-                msg = 'Value {} in attribute "padding" of operator Padding ' \
-                      'is not valid.'
-                raise tvm.error.OpAttributeInvalid(msg.format(str(padding)))
-        else:
-            msg = 'Value {} in attribute "padding" of operator Padding is ' \
-                  'not valid.'
+    if padding_type == "ZeroPadding2D":
+        if (
+            not isinstance(padding, int)
+            and isinstance(padding, tuple)
+            and isinstance(padding[0], int)
+        ):
+            top, left = padding
+            bottom, right = padding
+        elif (
+            not isinstance(padding, int)
+            and isinstance(padding, tuple)
+            and isinstance(padding[0], tuple)
+        ):
+            top, bottom = padding[0]
+            left, right = padding[1]
+        elif (
+            not isinstance(padding, int)
+            and isinstance(padding, tuple)
+            or not isinstance(padding, int)
+        ):
+            msg = (
+                'Value {} in attribute "padding" of operator Padding '
+                "is not valid."
+            )
             raise tvm.error.OpAttributeInvalid(msg.format(str(padding)))
+        else:
+            top = left = bottom = right = padding
     else:
-        msg = 'Operator {} is not supported in frontend Keras.'
+        msg = "Operator {} is not supported in frontend Keras."
         raise tvm.error.OpNotImplemented(msg.format(padding_type))
-    if etab.data_layout == 'NCHW':
-        return _op.nn.pad(data=inexpr, pad_width=((0, 0), (0, 0), (top, bottom), (left, right)))
-    return _op.nn.pad(data=inexpr, pad_width=((0, 0), (top, bottom), (left, right), (0, 0)))
+    if etab.data_layout == "NCHW":
+        return _op.nn.pad(
+            data=inexpr, pad_width=((0, 0), (0, 0), (top, bottom), (left, right))
+        )
+    return _op.nn.pad(
+        data=inexpr, pad_width=((0, 0), (top, bottom), (left, right), (0, 0))
+    )
+
 
 def _convert_padding3d(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
@@ -719,26 +821,39 @@ def _convert_padding3d(inexpr, keras_layer, etab):
         h_pad = padding[1]
         w_pad = padding[2]
     else:
-        msg = 'Value {} in attribute "padding" of operator ZeroPadding3D is ' \
-              'not valid.'
+        msg = (
+            'Value {} in attribute "padding" of operator ZeroPadding3D is ' "not valid."
+        )
         raise tvm.error.OpAttributeInvalid(msg.format(str(padding)))
 
-    if etab.data_layout == 'NCDHW':
-        out = _op.nn.pad(data=inexpr, pad_width=((0, 0), (0, 0),
-                                                 (d_pad[0], d_pad[1]),
-                                                 (h_pad[0], h_pad[1]),
-                                                 (w_pad[0], w_pad[1])))
-    else:
-        out = _op.nn.pad(data=inexpr, pad_width=((0, 0),
-                                                 (d_pad[0], d_pad[1]),
-                                                 (h_pad[0], h_pad[1]),
-                                                 (w_pad[0], w_pad[1]),
-                                                 (0, 0)))
-    return out
+    return (
+        _op.nn.pad(
+            data=inexpr,
+            pad_width=(
+                (0, 0),
+                (0, 0),
+                (d_pad[0], d_pad[1]),
+                (h_pad[0], h_pad[1]),
+                (w_pad[0], w_pad[1]),
+            ),
+        )
+        if etab.data_layout == "NCDHW"
+        else _op.nn.pad(
+            data=inexpr,
+            pad_width=(
+                (0, 0),
+                (d_pad[0], d_pad[1]),
+                (h_pad[0], h_pad[1]),
+                (w_pad[0], w_pad[1]),
+                (0, 0),
+            ),
+        )
+    )
+
 
 def _convert_concat(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
-    if etab.data_layout == 'NHWC' or len(keras_layer.input_shape[0]) < 4:
+    if etab.data_layout == "NHWC" or len(keras_layer.input_shape[0]) < 4:
         axis = -1
     else:
         axis = 1
@@ -747,26 +862,28 @@ def _convert_concat(inexpr, keras_layer, etab):
 
 def _convert_reshape(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
-    inshape = keras_layer.input_shape # includes batch
-    tshape = keras_layer.target_shape # no batch
+    inshape = keras_layer.input_shape  # includes batch
+    tshape = keras_layer.target_shape  # no batch
     if len(inshape) == 3 and len(tshape) == 1:
         # (?, a, b) -> (-1, ab)
         shape = (-1, tshape[0])
-    elif len(inshape) in [2, 3] and len(tshape) == 2:
+    elif len(inshape) in {2, 3} and len(tshape) == 2:
         # (?, cc) -> (-1, c, c)
         # (?, a, b) -> (-1, c, c)
-        assert tshape[0] == tshape[1], \
-            "Only supports square target shapes, but got {}".format(tshape)
-        shape = (-1, ) + tshape
+        assert (
+            tshape[0] == tshape[1]
+        ), f"Only supports square target shapes, but got {tshape}"
+        shape = (-1,) + tshape
     else:
         # (?, h, w, c) -> (-1, c, H, W)
         # (?, h, w, c) -> (-1, c, hw)
         # (?, hw, c) -> (-1, c, h, w)
         ch = inshape[-1]
-        assert ch == tshape[-1], \
-            "Only supports last dimension in target shape being equal to " \
+        assert ch == tshape[-1], (
+            "Only supports last dimension in target shape being equal to "
             "the channel number of input tensor."
-        if etab.data_layout == 'NCHW':
+        )
+        if etab.data_layout == "NCHW":
             shape = (-1, ch) + tshape[:-1]
         else:
             shape = (-1,) + tshape[:-1] + (ch,)
@@ -776,7 +893,7 @@ def _convert_reshape(inexpr, keras_layer, etab):
 def _convert_lstm(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     if not isinstance(inexpr, list):
-        buf = np.zeros((1, keras_layer.units), 'float32')
+        buf = np.zeros((1, keras_layer.units), "float32")
         c_op = etab.new_const(buf)
         h_op = etab.new_const(buf)
         inexpr = [inexpr, h_op, c_op]
@@ -784,7 +901,7 @@ def _convert_lstm(inexpr, keras_layer, etab):
     next_h = inexpr[1]
     next_c = inexpr[2]
     weightList = keras_layer.get_weights()
-    in_shape = tuple(dim if dim else 1 for dim in _as_list(keras_layer.input_shape)[0])
+    in_shape = tuple(dim or 1 for dim in _as_list(keras_layer.input_shape)[0])
     kernel_weight = etab.new_const(weightList[0].transpose([1, 0]))
     recurrent_weight = etab.new_const(weightList[1].transpose([1, 0]))
     in_bias = etab.new_const(weightList[2])
@@ -795,15 +912,19 @@ def _convert_lstm(inexpr, keras_layer, etab):
     # loop for the number of time_steps
     for data in in_data:
         ixh1 = _op.nn.dense(data, kernel_weight, units=units)
-        ixh2 = _op.nn.bias_add(_op.nn.dense(next_h, recurrent_weight, units=units), bias=in_bias)
+        ixh2 = _op.nn.bias_add(
+            _op.nn.dense(next_h, recurrent_weight, units=units), bias=in_bias
+        )
         gate = ixh1 + ixh2
         gates = _op.split(gate, indices_or_sections=4, axis=1)
         in_gate = _convert_recurrent_activation(gates[0], keras_layer)
         in_transform = _convert_recurrent_activation(gates[1], keras_layer)
-        next_c = in_transform * next_c + in_gate * _convert_activation(gates[2], keras_layer, None)
+        next_c = in_transform * next_c + in_gate * _convert_activation(
+            gates[2], keras_layer, None
+        )
         out_gate = _convert_recurrent_activation(gates[3], keras_layer)
         next_h = out_gate * _convert_activation(next_c, keras_layer, None)
-    out_shape = tuple(dim if dim else 1 for dim in _as_list(keras_layer.output_shape)[0])
+    out_shape = tuple(dim or 1 for dim in _as_list(keras_layer.output_shape)[0])
     out = _op.reshape(next_h, newshape=out_shape)
     return [out, next_h, next_c]
 
@@ -811,7 +932,7 @@ def _convert_lstm(inexpr, keras_layer, etab):
 def _convert_simple_rnn(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     if not isinstance(inexpr, list):
-        buf = np.zeros((1, keras_layer.units), 'float32')
+        buf = np.zeros((1, keras_layer.units), "float32")
         prev_op = etab.new_const(buf)
         inexpr = [inexpr, prev_op]
     in_data = inexpr[0]
@@ -822,12 +943,16 @@ def _convert_simple_rnn(inexpr, keras_layer, etab):
     in_bias = etab.new_const(weightList[2])
     units = list(weightList[0].shape)[1]
     in_data = _op.nn.batch_flatten(in_data)
-    ixh = _op.nn.bias_add(_op.nn.dense(in_data, kernel_weight, units=units), bias=in_bias)
+    ixh = _op.nn.bias_add(
+        _op.nn.dense(in_data, kernel_weight, units=units), bias=in_bias
+    )
     prev_op = _op.nn.batch_flatten(prev_op)
     ixh2 = _op.nn.dense(prev_op, recurrent_weight, units=units)
     output = ixh + ixh2
     output = _convert_activation(output, keras_layer, None)
-    out_shape = tuple(dim if dim else 1 for dim in _as_list(keras_layer.output_shape)[0])
+    out_shape = tuple(
+        dim or 1 for dim in _as_list(keras_layer.output_shape)[0]
+    )
     output = _op.reshape(output, newshape=out_shape)
     return [output, output]
 
@@ -835,7 +960,7 @@ def _convert_simple_rnn(inexpr, keras_layer, etab):
 def _convert_gru(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
     if not isinstance(inexpr, list):
-        buf = np.zeros((1, keras_layer.units), 'float32')
+        buf = np.zeros((1, keras_layer.units), "float32")
         h_tm1 = etab.new_const(buf)
         inexpr = [inexpr, h_tm1]
     in_data = inexpr[0]
@@ -846,7 +971,9 @@ def _convert_gru(inexpr, keras_layer, etab):
     in_bias = etab.new_const(weightList[2])
     units = list(weightList[0].shape)[1]
     in_data = _op.nn.batch_flatten(in_data)
-    matrix_x = _op.nn.bias_add(_op.nn.dense(in_data, kernel_weight, units=units), in_bias)
+    matrix_x = _op.nn.bias_add(
+        _op.nn.dense(in_data, kernel_weight, units=units), in_bias
+    )
     # inputs projected by all gate matrices at once
     split_indices = [keras_layer.units, 2 * keras_layer.units]
     gates = _op.split(matrix_x, indices_or_sections=split_indices, axis=1)
@@ -869,54 +996,53 @@ def _convert_gru(inexpr, keras_layer, etab):
     recurrent_h = _op.nn.dense(rec_act_r * h_tm1_op, rec_weights[1], units=units)
     act_hh = _convert_activation(x_h + recurrent_h, keras_layer, None)
     # previous and candidate state mixed by update gate
-    output = rec_act_z * h_tm1_op + (_expr.const(1., dtype='float32') - rec_act_z) * act_hh
-    out_shape = tuple(dim if dim else 1 for dim in _as_list(keras_layer.output_shape)[0])
+    output = (
+        rec_act_z * h_tm1_op + (_expr.const(1.0, dtype="float32") - rec_act_z) * act_hh
+    )
+    out_shape = tuple(
+        dim or 1 for dim in _as_list(keras_layer.output_shape)[0]
+    )
     output = _op.reshape(output, newshape=out_shape)
     return [output, output]
 
 
-def _default_skip(inexpr, keras_layer, _): # pylint: disable=unused-argument
+def _default_skip(inexpr, keras_layer, _):  # pylint: disable=unused-argument
     """Layers that can be skipped because they are train time only."""
     return inexpr
 
 
 _convert_map = {
-    'TSM': _convert_tsm,
-    'Attention_mask': _convert_attention_mask,
-    'Expand_dim': _convert_expand_dim,
-    'Dense'                    : _convert_dense,
-    'Activation'               : _convert_activation,
-    'Softmax'                  : _convert_advanced_activation,
-    'ReLU'                     : _convert_advanced_activation,
-    'LeakyReLU'                : _convert_advanced_activation,
-    'PReLU'                    : _convert_advanced_activation,
-    'ELU'                      : _convert_advanced_activation,
-    'ThresholdedReLU'          : _convert_advanced_activation,
-
-    'AveragePooling2D'         : _convert_pooling,
-    'MaxPooling2D'             : _convert_pooling,
-    'GlobalAveragePooling2D'   : _convert_pooling,
-    'GlobalMaxPooling2D'       : _convert_pooling,
-    'Conv2D'                   : _convert_convolution,
-    'Conv2DTranspose'          : _convert_convolution,
-    'DepthwiseConv2D'          : _convert_convolution,
-    'SeparableConv2D'          : _convert_separable_convolution,
-
-    'Flatten'                  : _convert_flatten,
-    'Reshape'                  : _convert_reshape,
-    'Concatenate'              : _convert_concat,
-    'BatchNormalization'       : _convert_batchnorm,
-
+    "TSM": _convert_tsm,
+    "Attention_mask": _convert_attention_mask,
+    "Expand_dim": _convert_expand_dim,
+    "Dense": _convert_dense,
+    "Activation": _convert_activation,
+    "Softmax": _convert_advanced_activation,
+    "ReLU": _convert_advanced_activation,
+    "LeakyReLU": _convert_advanced_activation,
+    "PReLU": _convert_advanced_activation,
+    "ELU": _convert_advanced_activation,
+    "ThresholdedReLU": _convert_advanced_activation,
+    "AveragePooling2D": _convert_pooling,
+    "MaxPooling2D": _convert_pooling,
+    "GlobalAveragePooling2D": _convert_pooling,
+    "GlobalMaxPooling2D": _convert_pooling,
+    "Conv2D": _convert_convolution,
+    "Conv2DTranspose": _convert_convolution,
+    "DepthwiseConv2D": _convert_convolution,
+    "SeparableConv2D": _convert_separable_convolution,
+    "Flatten": _convert_flatten,
+    "Reshape": _convert_reshape,
+    "Concatenate": _convert_concat,
+    "BatchNormalization": _convert_batchnorm,
     # Specific tf.Keras terminology for batch normalization
-    'BatchNormalizationV1'     : _convert_batchnorm,
-
-    'Add'                      : _convert_merge,
-    'Subtract'                 : _convert_merge,
-    'Multiply'                 : _convert_merge,
-    'ZeroPadding2D'            : _convert_padding,
-    'UpSampling2D'             : _convert_upsample,
-    'Cropping2D'               : _convert_cropping,
-
+    "BatchNormalizationV1": _convert_batchnorm,
+    "Add": _convert_merge,
+    "Subtract": _convert_merge,
+    "Multiply": _convert_merge,
+    "ZeroPadding2D": _convert_padding,
+    "UpSampling2D": _convert_upsample,
+    "Cropping2D": _convert_cropping,
     # 'ZeroPadding1D'          : _convert_padding,
     # 'AveragePooling1D'       : _convert_pooling,
     # 'MaxPooling1D'           : _convert_pooling,
@@ -925,38 +1051,34 @@ _convert_map = {
     # 'Cropping1D'             : _convert_cropping,
     # 'UpSampling1D'           : _convert_upsample,
     # 'Conv1D'                 : _convert_convolution1d,
-
-    'Conv3D'                   : _convert_convolution3d,
+    "Conv3D": _convert_convolution3d,
     # 'Conv3DTranspose'        : _convert_convolution3d,
     # 'SeparableConv3D'        : _convert_convolution3d,
-    'MaxPooling3D'             : _convert_pooling3d,
-    'AveragePooling3D'         : _convert_pooling3d,
+    "MaxPooling3D": _convert_pooling3d,
+    "AveragePooling3D": _convert_pooling3d,
     # 'GlobalMaxPooling3D'     : _convert_pooling3d,
     # 'GlobalAveragePooling3D' : _convert_pooling3d,
-    'UpSampling3D'             : _convert_upsample3d,
-    'ZeroPadding3D'            : _convert_padding3d,
-
-    'SimpleRNN'                : _convert_simple_rnn,
-    'LSTM'                     : _convert_lstm,
-    'GRU'                      : _convert_gru,
+    "UpSampling3D": _convert_upsample3d,
+    "ZeroPadding3D": _convert_padding3d,
+    "SimpleRNN": _convert_simple_rnn,
+    "LSTM": _convert_lstm,
+    "GRU": _convert_gru,
     # 'Bidirectional'          : _convert_bidirectional,
     # 'TimeDistributed'        : _default_skip,
-
-    'Average'                  : _convert_merge,
-    'Minimum'                  : _convert_merge,
-    'Maximum'                  : _convert_merge,
-    'Dot'                      : _convert_merge,
-    'Permute'                  : _convert_permute,
-    'Embedding'                : _convert_embedding,
+    "Average": _convert_merge,
+    "Minimum": _convert_merge,
+    "Maximum": _convert_merge,
+    "Dot": _convert_merge,
+    "Permute": _convert_permute,
+    "Embedding": _convert_embedding,
     # 'RepeatVector'           : _convert_repeat_vector,
-
-    'InputLayer'               : _default_skip,
-    'Dropout'                  : _default_skip,
-    'AlphaDropout'             : _default_skip,
-    'SpatialDropout2D'         : _default_skip,
-    'SpatialDropout1D'         : _default_skip,
-    'GaussianDropout'          : _default_skip,
-    'GaussianNoise'            : _default_skip,
+    "InputLayer": _default_skip,
+    "Dropout": _default_skip,
+    "AlphaDropout": _default_skip,
+    "SpatialDropout2D": _default_skip,
+    "SpatialDropout1D": _default_skip,
+    "GaussianDropout": _default_skip,
+    "GaussianNoise": _default_skip,
 }
 
 
@@ -968,8 +1090,9 @@ def _check_unsupported_layers(model):
             missing_ops.add(op_name)
 
     if missing_ops:
-        raise NotImplementedError( \
-            "The following operators are not implemented: {}".format(missing_ops))
+        raise NotImplementedError(
+            f"The following operators are not implemented: {missing_ops}"
+        )
 
 
 def keras_op_to_relay(inexpr, keras_layer, outname, etab):
@@ -992,15 +1115,16 @@ def keras_op_to_relay(inexpr, keras_layer, outname, etab):
     op_name = type(keras_layer).__name__
     if op_name not in _convert_map:
         raise tvm.error.OpNotImplemented(
-            'Operator {} is not supported for frontend Keras.'.format(op_name))
+            f"Operator {op_name} is not supported for frontend Keras."
+        )
     outs = _convert_map[op_name](inexpr, keras_layer, etab)
     outs = _as_list(outs)
     for t_idx, out in enumerate(outs):
-        name = outname + ":" + str(t_idx)
+        name = f"{outname}:{str(t_idx)}"
         etab.set_expr(name, out)
 
 
-def from_keras(model, shape=None, layout='NCHW', dtype='float32'):
+def from_keras(model, shape=None, layout="NCHW", dtype="float32"):
     """Convert keras model to relay Function.
 
     Parameters
@@ -1024,14 +1148,15 @@ def from_keras(model, shape=None, layout='NCHW', dtype='float32'):
     params : dict of str to tvm.nd.NDArray
         The parameter dict to be used by Relay.
     """
+
     def _check_model_is_tf_keras():
         return type(model).__module__.startswith("tensorflow.python.keras")
 
     def _convert_input_layer(keras_layer):
 
-        if len(shape) == 2: # For mix model
+        if len(shape) == 2:  # For mix model
             input_name = keras_layer.name
-            if input_name == 'app':
+            if input_name == "app":
                 var = new_var(input_name, shape=shape[0], dtype=dtype)
                 etab.set_expr(input_name, var)
             else:
@@ -1052,10 +1177,14 @@ def from_keras(model, shape=None, layout='NCHW', dtype='float32'):
             import keras
         except ImportError:
             raise ImportError("Keras must be installed")
-        if keras.backend.backend() != 'tensorflow':
-            raise ValueError("Keras frontend currently supports tensorflow backend only.")
-        if keras.backend.image_data_format() != 'channels_last':
-            raise ValueError("Keras frontend currently supports data_format = channels_last only.")
+        if keras.backend.backend() != "tensorflow":
+            raise ValueError(
+                "Keras frontend currently supports tensorflow backend only."
+            )
+        if keras.backend.image_data_format() != "channels_last":
+            raise ValueError(
+                "Keras frontend currently supports data_format = channels_last only."
+            )
         expected_model_class = keras.engine.training.Model
         input_layer_class = keras.engine.InputLayer
     else:
@@ -1071,7 +1200,11 @@ def from_keras(model, shape=None, layout='NCHW', dtype='float32'):
 
     etab = ExprTable()
     # Set global data format.
-    assert layout in ['NCHW', 'NHWC', 'NDHWC'], "Layout must be one of 'NCHW', NHWC or NDHWC"
+    assert layout in [
+        "NCHW",
+        "NHWC",
+        "NDHWC",
+    ], "Layout must be one of 'NCHW', NHWC or NDHWC"
     etab.data_layout = layout
     for keras_layer in model.layers:
         if isinstance(keras_layer, input_layer_class):
@@ -1081,25 +1214,41 @@ def from_keras(model, shape=None, layout='NCHW', dtype='float32'):
             #     etab.data_layout = layout
             _convert_input_layer(keras_layer)
         else:
-            if len(shape) == 2 and 'conv2d' in keras_layer.name or len(shape) == 2 and 'pooling2d' in keras_layer.name:
-                print('Processing layer: ', keras_layer.name)
-                etab.data_layout = 'NCHW'
+            if (
+                len(shape) == 2
+                and "conv2d" in keras_layer.name
+                or len(shape) == 2
+                and "pooling2d" in keras_layer.name
+            ):
+                print("Processing layer: ", keras_layer.name)
+                etab.data_layout = "NCHW"
             else:
                 etab.data_layout = layout
-            inbound_nodes = keras_layer.inbound_nodes if hasattr(keras_layer, 'inbound_nodes') \
-                       else keras_layer._inbound_nodes if hasattr(keras_layer, '_inbound_nodes') \
-                       else None
+            inbound_nodes = (
+                keras_layer.inbound_nodes
+                if hasattr(keras_layer, "inbound_nodes")
+                else (
+                    keras_layer._inbound_nodes
+                    if hasattr(keras_layer, "_inbound_nodes")
+                    else None
+                )
+            )
             if inbound_nodes is None:
-                raise TypeError("Unknown layer type or unsupported Keras version : {}"
-                                .format(keras_layer))
+                raise TypeError(
+                    "Unknown layer type or unsupported Keras version : {}".format(
+                        keras_layer
+                    )
+                )
             for node_idx, node in enumerate(inbound_nodes):
                 # If some nodes in imported model are not relevant to the current model,
                 # skip such layers.
                 # - In Keras, model._network_nodes contains keys of all nodes relevant to the
                 #   current model;
                 # - In tf.Keras, this is already done as part of tensorflow.keras.network.get_config
-                if not is_tf_keras and \
-                   not model._node_key(keras_layer, node_idx) in model._network_nodes:
+                if (
+                    not is_tf_keras
+                    and model._node_key(keras_layer, node_idx) not in model._network_nodes
+                ):
                     continue
                 inexpr = []
                 # Since Keras allows creating multiple layers from the same name instance,
@@ -1110,24 +1259,34 @@ def from_keras(model, shape=None, layout='NCHW', dtype='float32'):
                 zip_node = zip(
                     _as_list(node.node_indices),
                     _as_list(node.tensor_indices),
-                    _as_list(node.inbound_layers))
+                    _as_list(node.inbound_layers),
+                )
                 for n_idx, t_idx, inbound_layer in zip_node:
                     if isinstance(inbound_layer, input_layer_class):
                         expr_name = inbound_layer.name
                         _convert_input_layer(inbound_layer)
                     else:
-                        expr_name = inbound_layer.name + ':' + str(n_idx) + ':' + str(t_idx)
+                        expr_name = f"{inbound_layer.name}:{str(n_idx)}:{str(t_idx)}"
                     expr = etab.get_expr(expr_name)
                     inexpr.append(expr)
                 if len(inexpr) == 1:
                     inexpr = inexpr[0]
-                keras_op_to_relay(inexpr, keras_layer, keras_layer.name + ':' + str(node_idx), etab)
+                keras_op_to_relay(
+                    inexpr,
+                    keras_layer,
+                    f"{keras_layer.name}:{str(node_idx)}",
+                    etab,
+                )
     # model._output_coordinates contains out_node(oc[0]), node_index(oc[1]) and tensor_index(oc[2])
     # Get all output nodes in etab using the name made from above values.
     # The out exprs were added to etab in keras_op_to_relay using this name.
-    outexpr = [etab.get_expr(oc[0].name + ":" + str(oc[1]) + ":" + str(oc[2])) \
-               for oc in model._output_coordinates]
+    outexpr = [
+        etab.get_expr(f"{oc[0].name}:{str(oc[1])}:{str(oc[2])}")
+        for oc in model._output_coordinates
+    ]
     outexpr = outexpr[0] if len(outexpr) == 1 else _expr.Tuple(outexpr)
     func = _function.Function(analysis.free_vars(outexpr), outexpr)
-    params = {k:_nd.array(np.array(v, dtype=np.float32)) for k, v in etab.params.items()}
+    params = {
+        k: _nd.array(np.array(v, dtype=np.float32)) for k, v in etab.params.items()
+    }
     return IRModule.from_expr(func), params
